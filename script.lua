@@ -1,8 +1,9 @@
 local fov = 80
-local maxTransparency = 0.7 -- Transparência máxima dentro do círculo (0.7 = 70% de transparência, mais visível)
+local maxTransparency = 0.7 -- Transparência máxima dentro do círculo (0.7 = 70%)
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
+local Teams = game:GetService("Teams")
 local Cam = game.Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
@@ -10,32 +11,33 @@ local FOVring = Drawing.new("Circle")
 FOVring.Visible = true
 FOVring.Thickness = 2
 FOVring.Color = Color3.fromRGB(128, 0, 128) -- Cor roxa
-FOVring.Filled = true -- Preenchido para destacar, mas transparente
+FOVring.Filled = true
 FOVring.Radius = fov
 FOVring.Position = Cam.ViewportSize / 2
-FOVring.Transparency = 0.5 -- Define a transparência inicial do círculo
+FOVring.Transparency = 0.5 -- Define a transparência inicial
 
-local isFOVActive = true -- Controle para ativar/desativar o FOV
-local isMobile = UserInputService.TouchEnabled -- Detecta se o dispositivo é mobile
+local isFOVActive = true
+local isMobile = UserInputService.TouchEnabled -- Detecta dispositivos móveis
+local isTeamGame = false -- Inicialmente, não sabemos se é partida com equipes
 
--- Função para alternar o FOV
+-- Alternar visibilidade do FOV
 local function toggleFOV()
     isFOVActive = not isFOVActive
     FOVring.Visible = isFOVActive
 end
 
--- Função para atualizar a posição do círculo
+-- Atualizar posição do círculo
 local function updateDrawings()
     local camViewportSize = Cam.ViewportSize
     FOVring.Position = camViewportSize / 2
 end
 
--- Sistema de wall check
+-- Wall check para garantir que o alvo é visível
 local function isVisible(targetPart)
     local origin = Cam.CFrame.Position
     local direction = (targetPart.Position - origin).Unit
     local raycastParams = RaycastParams.new()
-    raycastParams.FilterDescendantsInstances = {LocalPlayer.Character or nil}
+    raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
     raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
 
     local result = workspace:Raycast(origin, direction * 500, raycastParams)
@@ -45,62 +47,72 @@ local function isVisible(targetPart)
     return true
 end
 
--- Função principal para atualização do FOV
-local function updateFOV()
-    if not isFOVActive then return end
-    updateDrawings()
-    local closest = getClosestPlayerInFOV("Head")
-    if closest and closest.Character:FindFirstChild("Head") then
-        if isVisible(closest.Character.Head) then
-            lookAt(closest.Character.Head.Position)
-        end
-    end
-
-    if closest then
-        local ePos, isVisible = Cam:WorldToViewportPoint(closest.Character.Head.Position)
-        local distance = (Vector2.new(ePos.x, ePos.y) - (Cam.ViewportSize / 2)).Magnitude
-        FOVring.Transparency = calculateTransparency(distance)
-    else
-        FOVring.Transparency = maxTransparency
-    end
-end
-
--- Ajustar mira para o jogador mais próximo
-local function lookAt(target)
-    local lookVector = (target - Cam.CFrame.Position).unit
-    local newCFrame = CFrame.new(Cam.CFrame.Position, Cam.CFrame.Position + lookVector)
-    Cam.CFrame = newCFrame
-end
-
--- Calcular transparência do círculo com base na distância
+-- Calcular transparência com base na distância
 local function calculateTransparency(distance)
     local maxDistance = fov
     local transparency = (1 - (distance / maxDistance)) * maxTransparency
     return transparency
 end
 
--- Encontrar jogador mais próximo dentro do FOV
+-- Detectar se é uma partida com equipes
+local function detectTeamGame()
+    local teamsExist = #Teams:GetTeams() > 0
+    local newMode = teamsExist
+    if newMode ~= isTeamGame then
+        isTeamGame = newMode
+        local notificationText = isTeamGame and "Modo de equipes detectado. Aimbot ajustado para mirar apenas em inimigos." or "Modo livre detectado. Aimbot ajustado para todos os jogadores."
+        game.StarterGui:SetCore("SendNotification", {
+            Title = "Modo de Jogo Alterado",
+            Text = notificationText,
+            Duration = 5
+        })
+    end
+end
+
+-- Encontrar jogador mais próximo no FOV
 local function getClosestPlayerInFOV(trg_part)
     local nearest = nil
-    local last = math.huge
+    local lastDistance = math.huge
     local playerMousePos = Cam.ViewportSize / 2
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
-            local part = player.Character and player.Character:FindFirstChild(trg_part)
-            if part and isVisible(part) then
-                local ePos, isVisible = Cam:WorldToViewportPoint(part.Position)
-                local distance = (Vector2.new(ePos.x, ePos.y) - playerMousePos).Magnitude
+            local isEnemy = not isTeamGame or (player.Team ~= LocalPlayer.Team)
+            if isEnemy then
+                local part = player.Character and player.Character:FindFirstChild(trg_part)
+                if part and isVisible(part) then
+                    local ePos, isVisible = Cam:WorldToViewportPoint(part.Position)
+                    local distance = (Vector2.new(ePos.X, ePos.Y) - playerMousePos).Magnitude
 
-                if distance < last and isVisible and distance < fov then
-                    last = distance
-                    nearest = player
+                    if isVisible and distance < fov and distance < lastDistance then
+                        lastDistance = distance
+                        nearest = player
+                    end
                 end
             end
         end
     end
-
     return nearest
+end
+
+-- Ajustar câmera para mirar no alvo
+local function lookAt(target)
+    local lookVector = (target - Cam.CFrame.Position).Unit
+    Cam.CFrame = CFrame.new(Cam.CFrame.Position, Cam.CFrame.Position + lookVector)
+end
+
+-- Atualizar FOV e mira
+local function updateFOV()
+    if not isFOVActive then return end
+    updateDrawings()
+    
+    local closest = getClosestPlayerInFOV("Head")
+    if closest and closest.Character:FindFirstChild("Head") then
+        local head = closest.Character.Head
+        if isVisible(head) then
+            lookAt(head.Position)
+        end
+    end
 end
 
 -- Adicionar botão móvel para dispositivos móveis
@@ -117,7 +129,6 @@ if isMobile then
     button.BorderSizePixel = 2
     button.Parent = ScreenGui
 
-    -- Permitir que o botão seja movido
     local dragging = false
     local dragInput, dragStart, startPos
 
@@ -157,10 +168,9 @@ if isMobile then
         toggleFOV()
     end)
 else
-    -- Mostra notificação para dispositivos PC
     game.StarterGui:SetCore("SendNotification", {
         Title = "FOV Script",
-        Text = "Pressione a tecla F para ativar/desativar o FOV.",
+        Text = "Pressione F para ativar/desativar o FOV.",
         Duration = 10
     })
 
@@ -171,5 +181,14 @@ else
     end)
 end
 
--- Inicializa o loop de renderização
+-- Verificar modo de jogo a cada 1 minuto
+detectTeamGame() -- Primeira verificação
+task.spawn(function()
+    while true do
+        task.wait(60) -- Espera 1 minuto
+        detectTeamGame()
+    end
+end)
+
+-- Iniciar loop de atualização
 RunService.RenderStepped:Connect(updateFOV)
